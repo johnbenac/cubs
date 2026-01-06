@@ -1,0 +1,41 @@
+{
+  "id": "pack-viz",
+  "name": "Cub Scout Pack Visualizer",
+  "version": "0.1.0",
+  "description": "Simple, dataset-embedded visualization views for the Cub Scout pack example dataset.",
+  "entry": "pack-viz.js",
+  "providers": [
+    {
+      "capability": "recordView",
+      "id": "pack-tree",
+      "title": "Pack org tree",
+      "match": {
+        "typeId": "pack"
+      }
+    },
+    {
+      "capability": "recordView",
+      "id": "den-roster",
+      "title": "Den roster",
+      "match": {
+        "typeId": "den"
+      }
+    },
+    {
+      "capability": "recordView",
+      "id": "relationship-mini",
+      "title": "Relationships (outgoing links)",
+      "match": {
+        "typeId": "*"
+      }
+    },
+    {
+      "capability": "recordView",
+      "id": "relationship-graph",
+      "title": "Relationships (graph)",
+      "match": {
+        "typeId": "*"
+      }
+    }
+  ]
+}

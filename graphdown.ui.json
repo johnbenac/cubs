@@ -1,0 +1,32 @@
+{
+  "dataset": {
+    "name": "Cub Scout Pack Example",
+    "description": "Example Graphdown dataset modeling a Cub Scout pack."
+  },
+  "views": {
+    "pack": {
+      "default": {
+        "pluginId": "pack-viz",
+        "providerId": "pack-tree"
+      }
+    },
+    "den": {
+      "default": {
+        "pluginId": "pack-viz",
+        "providerId": "den-roster"
+      }
+    },
+    "*": {
+      "secondary": [
+        {
+          "pluginId": "pack-viz",
+          "providerId": "relationship-mini"
+        },
+        {
+          "pluginId": "pack-viz",
+          "providerId": "relationship-graph"
+        }
+      ]
+    }
+  }
+}
