@@ -6,36 +6,28 @@
   "entry": "pack-viz.js",
   "providers": [
     {
-      "capability": "recordView",
+      "capability": "record.view",
       "id": "pack-tree",
       "title": "Pack org tree",
-      "match": {
-        "typeId": "pack"
-      }
+      "match": { "typeId": "pack" }
     },
     {
-      "capability": "recordView",
+      "capability": "record.view",
       "id": "den-roster",
       "title": "Den roster",
-      "match": {
-        "typeId": "den"
-      }
+      "match": { "typeId": "den" }
     },
     {
-      "capability": "recordView",
+      "capability": "record.view",
       "id": "relationship-mini",
       "title": "Relationships (outgoing links)",
-      "match": {
-        "typeId": "*"
-      }
+      "match": {}
     },
     {
-      "capability": "recordView",
+      "capability": "record.view",
       "id": "relationship-graph",
       "title": "Relationships (graph)",
-      "match": {
-        "typeId": "*"
-      }
+      "match": {}
     }
   ]
 }

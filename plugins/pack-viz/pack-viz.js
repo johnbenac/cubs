@@ -1,15 +1,21 @@
 /**
- * pack-viz (dataset-embedded UI plugin)
+ * pack-viz (dataset-embedded UI plugin) — Graphdown runtime compatible
  *
- * Lightweight, dependency-free visualizations for this dataset:
- * - Pack org tree (using parent pointers)
- * - Den roster (leaders + scouts)
- * - Outgoing links (list)
- * - Outgoing links (simple graph)
+ * Graphdown host expectations:
+ * - Entry file is an ES module
+ * - default export is an object: { [providerId]: rendererFn }
+ * - rendererFn signature: ({ container, ctx }) => void | cleanupFn | Promise<cleanupFn>
  *
- * NOTE: Graphdown v0.4 intentionally does not define a plugin runtime API.
- * If your host app passes a different ctx shape, tweak `tryGetAllRecords(ctx)`.
+ * ctx is Graphdown's RecordViewContext:
+ * {
+ *   typeId, recordId, recordKey,
+ *   recordFields, recordBody, typeFields,
+ *   outgoingLinks, incomingLinks,
+ *   graph
+ * }
  */
+
+/* ----------------------------- small DOM helpers ---------------------------- */
 
 function el(tag, attrs = {}, ...children) {
   const node = document.createElement(tag);
@@ -30,34 +36,190 @@ function clear(node) {
   while (node.firstChild) node.removeChild(node.firstChild);
 }
 
+/* ------------------------------- CSS injection ------------------------------ */
+/**
+ * Graphdown does not load plugin CSS files automatically.
+ * If you want styling, you must inline it (recommended) or use inline styles.
+ */
+const STYLE_ID = "pack-viz-inline-css";
+function ensureStyles() {
+  if (typeof document === "undefined") return;
+  if (document.getElementById(STYLE_ID)) return;
+
+  const css = `
+.pv-error {
+  padding: 12px;
+  border: 1px solid #d33;
+  border-radius: 8px;
+  background: rgba(255, 0, 0, 0.05);
+  font-family: system-ui, sans-serif;
+}
+
+.pv-note {
+  margin-top: 12px;
+  opacity: 0.8;
+  font-size: 0.95em;
+  font-family: system-ui, sans-serif;
+}
+
+.pv-subtle {
+  opacity: 0.7;
+  margin-bottom: 10px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 12px;
+}
+
+.pv-tree {
+  list-style: none;
+  padding-left: 18px;
+  margin: 6px 0;
+  font-family: system-ui, sans-serif;
+}
+
+.pv-node {
+  margin: 6px 0;
+}
+
+.pv-node-title {
+  font-weight: 600;
+}
+
+.pv-node-key {
+  opacity: 0.7;
+  font-size: 0.9em;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+}
+
+.pv-graph {
+  width: 100%;
+  max-width: 680px;
+  height: auto;
+  border: 1px solid rgba(0,0,0,0.12);
+  border-radius: 10px;
+  background: rgba(0,0,0,0.02);
+  margin-top: 8px;
+  font-family: system-ui, sans-serif;
+}
+
+.pv-edge {
+  stroke: rgba(0,0,0,0.25);
+  stroke-width: 1.5;
+}
+
+.pv-node-center {
+  fill: rgba(0,0,0,0.75);
+}
+
+.pv-node-known {
+  fill: rgba(0,0,0,0.55);
+}
+
+.pv-node-missing {
+  fill: rgba(255, 0, 0, 0.35);
+}
+
+.pv-label {
+  font-size: 12px;
+  fill: rgba(0,0,0,0.75);
+}
+
+.pv-label-center {
+  font-weight: 600;
+}
+`;
+
+  const style = document.createElement("style");
+  style.id = STYLE_ID;
+  style.textContent = css;
+  document.head.appendChild(style);
+}
+
+/* -------------------------- Graphdown record helpers ------------------------- */
+
+/**
+ * Graphdown does not standardize plugin graph APIs, but this host passes `ctx.graph`.
+ * We do best-effort extraction of record nodes from common shapes.
+ */
 function tryGetAllRecords(ctx) {
-  // Common patterns (adjust to your host app):
-  // - ctx.dataset.records (array)
-  // - ctx.getAllRecords() (function)
-  // - ctx.graph.records (map)
-  if (!ctx) return null;
+  const g = ctx && ctx.graph;
+  if (!g) return null;
 
-  if (Array.isArray(ctx.records)) return ctx.records;
-  if (ctx.dataset && Array.isArray(ctx.dataset.records)) return ctx.dataset.records;
-  if (typeof ctx.getAllRecords === "function") return ctx.getAllRecords();
+  // If graph.records is already an array
+  if (Array.isArray(g.records)) return g.records;
 
-  if (ctx.graph && ctx.graph.records && typeof ctx.graph.records === "object") {
-    return Object.values(ctx.graph.records);
+  // If graph.records is a Map
+  if (g.records && typeof g.records === "object" && typeof g.records.values === "function") {
+    return Array.from(g.records.values());
   }
+
+  // If graph.records is a plain object map
+  if (g.records && typeof g.records === "object") {
+    return Object.values(g.records);
+  }
+
+  // Common alternate names (best-effort)
+  const maybe =
+    g.recordsByKey ||
+    g.recordsById ||
+    g.recordIndex ||
+    (g.nodes && g.nodes.records);
+
+  if (Array.isArray(maybe)) return maybe;
+  if (maybe && typeof maybe === "object" && typeof maybe.values === "function") return Array.from(maybe.values());
+  if (maybe && typeof maybe === "object") return Object.values(maybe);
+
   return null;
 }
 
 function keyOf(rec) {
   if (!rec) return null;
-  if (rec.recordKey) return rec.recordKey;
-  if (rec.typeId && rec.recordId) return `${rec.typeId}:${rec.recordId}`;
+  if (typeof rec.recordKey === "string" && rec.recordKey) return rec.recordKey;
+  if (typeof rec.typeId === "string" && typeof rec.recordId === "string") return `${rec.typeId}:${rec.recordId}`;
   return null;
+}
+
+function parentKeyOf(rec) {
+  if (!rec) return null;
+
+  const p =
+    rec.parent ??
+    rec.parentKey ??
+    rec.parentRecordKey;
+
+  return typeof p === "string" && p ? p : null;
+}
+
+function fieldsOf(rec) {
+  // Graphdown graph nodes typically have `fields`
+  if (rec && rec.fields && typeof rec.fields === "object") return rec.fields;
+  return {};
 }
 
 function displayNameOf(rec) {
   if (!rec) return "(unknown)";
+  const f = fieldsOf(rec);
   const k = keyOf(rec) || "(unknown)";
-  return rec.fields?.name || rec.fields?.title || rec.fields?.fullName || k;
+  return f.name || f.title || f.fullName || k;
+}
+
+function displayNameFromCtx(ctx) {
+  const f = (ctx && ctx.recordFields && typeof ctx.recordFields === "object") ? ctx.recordFields : {};
+  const key = (ctx && ctx.recordKey) ? ctx.recordKey : `${ctx.typeId}:${ctx.recordId}`;
+  return f.name || f.title || f.fullName || key;
+}
+
+function findCurrentRecord(records, ctx) {
+  const wantedKey = ctx && typeof ctx.recordKey === "string" ? ctx.recordKey : null;
+  if (wantedKey) {
+    const hit = records.find((r) => keyOf(r) === wantedKey);
+    if (hit) return hit;
+  }
+  const fallbackKey = ctx ? `${ctx.typeId}:${ctx.recordId}` : null;
+  if (fallbackKey) {
+    const hit = records.find((r) => keyOf(r) === fallbackKey);
+    if (hit) return hit;
+  }
+  return null;
 }
 
 function isPack(rec) { return rec && rec.typeId === "pack"; }
@@ -68,7 +230,7 @@ function buildChildrenIndex(records) {
   // parent pointer index: parentKey -> [childRecord]
   const idx = new Map();
   for (const r of records) {
-    const p = r.parent || null;
+    const p = parentKeyOf(r);
     if (!p) continue;
     const arr = idx.get(p) || [];
     arr.push(r);
@@ -102,7 +264,7 @@ function renderTreeNode(rec, childrenIdx) {
 }
 
 function extractWikiLinks(text) {
-  // Extract [[...]] tokens. Core relationship extraction is stricter; this is UI-only.
+  // UI-only extraction (not core). Used for leader fields which often store '[[type:id]]'.
   if (!text || typeof text !== "string") return [];
   const out = [];
   const re = /\[\[([^\]]+)\]\]/g;
@@ -114,48 +276,26 @@ function extractWikiLinks(text) {
   return out;
 }
 
-function outgoingLinks(rec) {
-  const links = new Set();
-
-  // body
-  if (typeof rec.body === "string") {
-    for (const inner of extractWikiLinks(rec.body)) links.add(inner);
-  }
-
-  // strings anywhere in fields (deep walk)
-  function walk(v) {
-    if (typeof v === "string") {
-      for (const inner of extractWikiLinks(v)) links.add(inner);
-      return;
-    }
-    if (Array.isArray(v)) {
-      for (const x of v) walk(x);
-      return;
-    }
-    if (v && typeof v === "object") {
-      for (const x of Object.values(v)) walk(x);
-    }
-  }
-  walk(rec.fields);
-
-  return Array.from(links).sort();
-}
-
 const RECORD_REF_RE = /^[A-Za-z0-9][A-Za-z0-9_-]*:[A-Za-z0-9][A-Za-z0-9_-]*$/;
 
-function renderPackTree(container, ctx) {
+/* ------------------------------- View renderers ------------------------------ */
+
+function renderPackTreeView(container, ctx) {
+  ensureStyles();
   clear(container);
 
   const records = tryGetAllRecords(ctx);
   if (!records) {
     container.appendChild(el("div", { class: "pv-error" },
-      "pack-viz: couldn't find records on ctx. ",
-      "Provide ctx.dataset.records (array) or ctx.getAllRecords()."
+      "pack-viz: couldn't find records. This host provides ctx.graph; ",
+      "ensure ctx.graph contains a records map/array."
     ));
     return;
   }
 
-  const pack = records.find(isPack);
+  const current = findCurrentRecord(records, ctx);
+  const pack = (current && isPack(current)) ? current : records.find(isPack);
+
   if (!pack) {
     container.appendChild(el("div", { class: "pv-error" }, "No pack record found."));
     return;
@@ -169,16 +309,18 @@ function renderPackTree(container, ctx) {
   container.appendChild(rootUl);
 }
 
-function renderDenRoster(container, ctx, currentRecord) {
+function renderDenRosterView(container, ctx) {
+  ensureStyles();
   clear(container);
 
   const records = tryGetAllRecords(ctx);
   if (!records) {
-    container.appendChild(el("div", { class: "pv-error" }, "pack-viz: couldn't find records on ctx."));
+    container.appendChild(el("div", { class: "pv-error" }, "pack-viz: couldn't find records on ctx.graph."));
     return;
   }
 
-  const den = currentRecord && isDen(currentRecord) ? currentRecord : records.find(isDen);
+  let den = findCurrentRecord(records, ctx);
+  if (!den || !isDen(den)) den = records.find(isDen);
 
   if (!den) {
     container.appendChild(el("div", { class: "pv-error" }, "No den record found."));
@@ -186,20 +328,22 @@ function renderDenRoster(container, ctx, currentRecord) {
   }
 
   const denKey = keyOf(den);
-  const kids = records.filter(r => r.parent === denKey);
-
-  const leaders = (den.fields?.leaders || [])
-    .filter(x => typeof x === "string")
-    .flatMap(extractWikiLinks);
-
+  const kids = denKey ? records.filter((r) => parentKeyOf(r) === denKey) : [];
   const scouts = kids.filter(isScout);
 
-  container.appendChild(el("h2", {}, den.fields?.name || "Den roster"));
+  const denFields = fieldsOf(den);
+  const leadersRaw = Array.isArray(denFields.leaders) ? denFields.leaders : [];
+  const leaders = leadersRaw
+    .filter((x) => typeof x === "string")
+    .flatMap(extractWikiLinks)
+    .filter((x) => RECORD_REF_RE.test(x));
+
+  container.appendChild(el("h2", {}, denFields.name || "Den roster"));
 
   container.appendChild(el("h3", {}, "Leaders"));
   const leaderUl = el("ul", {});
   if (leaders.length === 0) leaderUl.appendChild(el("li", {}, "(none listed)"));
-  for (const l of leaders) leaderUl.appendChild(el("li", {}, l));
+  for (const l of leaders) leaderUl.appendChild(el("li", {}, `[[${l}]]`));
   container.appendChild(leaderUl);
 
   container.appendChild(el("h3", {}, "Scouts (by parent pointers)"));
@@ -209,56 +353,60 @@ function renderDenRoster(container, ctx, currentRecord) {
   container.appendChild(scoutUl);
 
   container.appendChild(el("p", { class: "pv-note" },
-    "This view uses both the den’s fields (leaders) and the record hierarchy (scouts as children)."
+    "This view uses the den's leaders field and child records (parent pointers) to build the roster."
   ));
 }
 
-function renderOutgoingLinksList(container, ctx, currentRecord) {
+function renderRelationshipsListView(container, ctx) {
+  ensureStyles();
   clear(container);
 
-  const rec = currentRecord || (tryGetAllRecords(ctx) || [])[0];
-  if (!rec) {
-    container.appendChild(el("div", { class: "pv-error" }, "No record provided."));
-    return;
-  }
+  const key = ctx && ctx.recordKey ? ctx.recordKey : `${ctx.typeId}:${ctx.recordId}`;
+  const outgoing = Array.isArray(ctx.outgoingLinks) ? ctx.outgoingLinks : [];
+  const incoming = Array.isArray(ctx.incomingLinks) ? ctx.incomingLinks : [];
 
-  const links = outgoingLinks(rec);
+  container.appendChild(el("h2", {}, "Relationships"));
+  container.appendChild(el("div", { class: "pv-subtle" }, key));
 
-  container.appendChild(el("h2", {}, "Outgoing links"));
-  container.appendChild(el("div", { class: "pv-subtle" }, keyOf(rec) || ""));
+  // Outgoing
+  container.appendChild(el("h3", {}, "Outgoing"));
+  const outUl = el("ul", {});
+  if (!outgoing.length) outUl.appendChild(el("li", {}, "(none)"));
+  for (const l of outgoing) outUl.appendChild(el("li", {}, `[[${l}]]`));
+  container.appendChild(outUl);
 
-  const ul = el("ul", {});
-  if (!links.length) ul.appendChild(el("li", {}, "(none)"));
-  for (const l of links) ul.appendChild(el("li", {}, `[[${l}]]`));
-  container.appendChild(ul);
+  // Incoming
+  container.appendChild(el("h3", {}, "Incoming"));
+  const inUl = el("ul", {});
+  if (!incoming.length) inUl.appendChild(el("li", {}, "(none)"));
+  for (const l of incoming) inUl.appendChild(el("li", {}, `[[${l}]]`));
+  container.appendChild(inUl);
 
   container.appendChild(el("p", { class: "pv-note" },
-    "Links are extracted from the record body and any string values inside fields."
+    "These links come from Graphdown's core extraction (bodies + string field values)."
   ));
 }
 
-function renderOutgoingLinksGraph(container, ctx, currentRecord) {
+function renderOutgoingLinksGraphView(container, ctx) {
+  ensureStyles();
   clear(container);
 
   const records = tryGetAllRecords(ctx) || [];
-  const rec = currentRecord || records[0];
-  if (!rec) {
-    container.appendChild(el("div", { class: "pv-error" }, "No record provided."));
-    return;
+  const recordIndex = new Map();
+  for (const r of records) {
+    const k = keyOf(r);
+    if (k) recordIndex.set(k, r);
   }
 
-  const recordIndex = new Map();
-  for (const r of records) recordIndex.set(keyOf(r), r);
+  const centerKey = ctx && ctx.recordKey ? ctx.recordKey : `${ctx.typeId}:${ctx.recordId}`;
+  const centerLabel = displayNameFromCtx(ctx);
 
-  const centerKey = keyOf(rec) || "(unknown)";
-  const centerLabel = displayNameOf(rec);
-
-  const rawLinks = outgoingLinks(rec);
-  const recordLinks = rawLinks.filter(x => RECORD_REF_RE.test(x));
+  const rawLinks = Array.isArray(ctx.outgoingLinks) ? ctx.outgoingLinks : [];
+  const recordLinks = rawLinks.filter((x) => RECORD_REF_RE.test(x));
 
   const nodes = [
     { key: centerKey, label: centerLabel, kind: "center" },
-    ...recordLinks.map(k => {
+    ...recordLinks.map((k) => {
       const target = recordIndex.get(k);
       return {
         key: k,
@@ -287,10 +435,14 @@ function renderOutgoingLinksGraph(container, ctx, currentRecord) {
     }));
   }
 
-  // Nodes
   // Center
   svg.appendChild(el("circle", { cx: String(cx), cy: String(cy), r: "18", class: "pv-node-center" }));
-  svg.appendChild(el("text", { x: String(cx), y: String(cy - 26), class: "pv-label pv-label-center", "text-anchor": "middle" }, centerLabel));
+  svg.appendChild(el("text", {
+    x: String(cx),
+    y: String(cy - 26),
+    class: "pv-label pv-label-center",
+    "text-anchor": "middle"
+  }, centerLabel));
 
   // Others
   for (let i = 1; i < nodes.length; i++) {
@@ -317,44 +469,23 @@ function renderOutgoingLinksGraph(container, ctx, currentRecord) {
 
   container.appendChild(el("h2", {}, "Outgoing links graph"));
   container.appendChild(el("div", { class: "pv-subtle" }, centerKey));
+
   if (!recordLinks.length) {
     container.appendChild(el("p", { class: "pv-note" }, "No outgoing record links found to visualize."));
   }
+
   container.appendChild(svg);
 
   container.appendChild(el("p", { class: "pv-note" },
-    "This is a simple radial visualization of outgoing wiki-links. Missing targets (unresolved links) are allowed by core, but shown differently here."
+    "Missing targets (unresolved links) are allowed by core, but shown differently here."
   ));
 }
 
-// Export a shape that's easy for a host app to consume.
-export const graphdownPlugin = {
-  id: "pack-viz",
-  version: "0.1.0",
-  providers: [
-    {
-      capability: "recordView",
-      id: "pack-tree",
-      title: "Pack org tree",
-      render: (container, ctx, currentRecord) => renderPackTree(container, ctx)
-    },
-    {
-      capability: "recordView",
-      id: "den-roster",
-      title: "Den roster",
-      render: (container, ctx, currentRecord) => renderDenRoster(container, ctx, currentRecord)
-    },
-    {
-      capability: "recordView",
-      id: "relationship-mini",
-      title: "Relationships (outgoing links)",
-      render: (container, ctx, currentRecord) => renderOutgoingLinksList(container, ctx, currentRecord)
-    },
-    {
-      capability: "recordView",
-      id: "relationship-graph",
-      title: "Relationships (graph)",
-      render: (container, ctx, currentRecord) => renderOutgoingLinksGraph(container, ctx, currentRecord)
-    }
-  ]
+/* -------------------------- REQUIRED Graphdown export ------------------------ */
+
+export default {
+  "pack-tree": ({ container, ctx }) => renderPackTreeView(container, ctx),
+  "den-roster": ({ container, ctx }) => renderDenRosterView(container, ctx),
+  "relationship-mini": ({ container, ctx }) => renderRelationshipsListView(container, ctx),
+  "relationship-graph": ({ container, ctx }) => renderOutgoingLinksGraphView(container, ctx)
 };
