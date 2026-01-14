@@ -6,7 +6,6 @@ It includes:
 
 - Type objects in `types/`
 - Record objects in `records/` using the canonical parent-based export layout
-- A sample UI plugin under `plugins/` plus a `graphdown.ui.json` configuration file
 
 Notes:
 - All contact info is fake/demo data.
